@@ -92,3 +92,6 @@ PLAN.md
 
 # roscoe runtime
 logs/
+
+# local-only build spec (kept out of the repo)
+PLAN.md
