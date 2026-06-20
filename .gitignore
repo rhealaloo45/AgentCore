@@ -89,3 +89,6 @@ Thumbs.db
 
 # Project-specific
 PLAN.md
+
+# roscoe runtime
+logs/
