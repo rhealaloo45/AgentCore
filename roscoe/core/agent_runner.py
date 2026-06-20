@@ -1,14 +1,19 @@
-"""AgentRunner — the main entry point.
+"""AgentRunner — the main entry point, with middleware wired in.
 
-``AgentRunner.from_config()`` reads a YAML config, builds a provider LLM and a
-tool-calling ReAct graph, and exposes the run API. The core is **async-first**:
-``arun()`` does the real work; ``run()`` is a thin ``asyncio.run`` wrapper for sync
-callers.
+``from_config()`` builds a provider LLM (with retry applied), a tool-calling ReAct
+graph, and the per-run middleware stack. The core is **async-first**: ``arun()`` does
+the work; ``run()`` is a thin ``asyncio.run`` wrapper.
+
+Every run automatically gets: rate limiting (before the call), retry (around each LLM
+call), cost tracking (after), and a non-blocking audit record — with zero extra code
+from the developer.
 """
 
 from __future__ import annotations
 
 import asyncio
+import warnings
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Sequence
 from uuid import uuid4
@@ -19,10 +24,14 @@ from langgraph.prebuilt import create_react_agent
 from roscoe.config.loader import load_config
 from roscoe.core.agent_result import AgentResult
 from roscoe.llm.provider_factory import ProviderFactory
+from roscoe.middleware.audit_logger import get_audit_logger
+from roscoe.middleware.cost_tracker import calculate_cost, sum_usage
+from roscoe.middleware.rate_limiter import RateLimiter
+from roscoe.middleware.retry import apply_retry
 
 
 class AgentRunner:
-    """Builds and runs a configured agent."""
+    """Builds and runs a configured agent with the full middleware stack."""
 
     def __init__(
         self,
@@ -32,12 +41,17 @@ class AgentRunner:
         agent_name: str,
         provider: str,
         model: str,
+        middleware: dict[str, Any],
+        rate_limiter: RateLimiter,
     ) -> None:
         self.config = config
         self._graph = graph
         self.agent_name = agent_name
         self.provider = provider
         self.model = model
+        self._mw = middleware
+        self._rate_limiter = rate_limiter
+        self._audit = get_audit_logger()
 
     # --- construction ---
 
@@ -47,69 +61,116 @@ class AgentRunner:
         config_path: str | Path,
         tools: Sequence[Callable[..., Any]] | None = None,
     ) -> "AgentRunner":
-        """Build an ``AgentRunner`` from a YAML config file.
-
-        Args:
-            config_path: Path to agent_config.yaml.
-            tools: Tools (``@tool``-decorated functions) the agent may call.
-        """
         config = load_config(config_path)
         model_cfg = config.get("model")
         if not model_cfg:
             raise ValueError("Config is missing the required 'model' block.")
 
-        llm = ProviderFactory.get_llm(model_cfg)
+        provider = model_cfg.get("provider", "")
+        middleware = config.get("middleware", {}) or {}
         tool_list = list(tools or [])
+
+        # Fail-fast capability check.
+        caps = ProviderFactory.capabilities(provider)
+        if tool_list and not caps.get("tool_calling", False):
+            warnings.warn(
+                f"Provider '{provider}' declares tool_calling=False but {len(tool_list)} "
+                f"tool(s) were supplied; tool calls may fail at runtime.",
+                stacklevel=2,
+            )
+
+        llm = ProviderFactory.get_llm(model_cfg)
+        llm = apply_retry(llm, middleware.get("retry"), provider)
 
         system_prompt = _load_system_prompt(config)
         kwargs: dict[str, Any] = {}
         if system_prompt:
             kwargs["state_modifier"] = system_prompt
-
         graph = create_react_agent(llm, tool_list, **kwargs)
+
+        rate_limiter = RateLimiter()
+        rate_limiter.configure(provider, middleware.get("rate_limiter"))
 
         return cls(
             config=config,
             graph=graph,
             agent_name=config.get("agent_name", "roscoe-agent"),
-            provider=model_cfg.get("provider", ""),
+            provider=provider,
             model=model_cfg.get("deployment") or model_cfg.get("model", ""),
+            middleware=middleware,
+            rate_limiter=rate_limiter,
         )
 
     # --- execution ---
 
     async def arun(self, user_input: str, *, user_id: str | None = None) -> AgentResult:
-        """Run the agent asynchronously and return an ``AgentResult``."""
         run_id = str(uuid4())
+        start = datetime.now(timezone.utc)
+
+        await self._rate_limiter.acquire(self.provider)
+
         try:
             state = await self._graph.ainvoke(
                 {"messages": [HumanMessage(content=user_input)]}
             )
             messages = state.get("messages", [])
-            return AgentResult(
+            inp, out, total = sum_usage(messages)
+            cost = self._cost(inp, out)
+            result = AgentResult(
                 output=_final_text(messages),
                 run_id=run_id,
-                total_tokens=_count_tokens(messages),
+                total_tokens=total,
+                cost_usd=cost,
                 status="success",
             )
         except Exception as exc:  # noqa: BLE001 — surface any failure as a result
-            return AgentResult(
+            result = AgentResult(
                 output="",
                 run_id=run_id,
                 error=f"{type(exc).__name__}: {exc}",
                 status="error",
             )
 
+        self._write_audit(result, user_id, start)
+        return result
+
     def run(self, user_input: str, *, user_id: str | None = None) -> AgentResult:
-        """Synchronous wrapper around :meth:`arun`."""
         return asyncio.run(self.arun(user_input, user_id=user_id))
+
+    # --- middleware helpers ---
+
+    def _cost(self, input_tokens: int, output_tokens: int) -> float | None:
+        if self._mw.get("cost_tracking", {}).get("enabled", True) is False:
+            return None
+        return calculate_cost(self.provider, self.model, input_tokens, output_tokens)
+
+    def _write_audit(
+        self, result: AgentResult, user_id: str | None, start: datetime
+    ) -> None:
+        if self._mw.get("audit", {}).get("enabled", True) is False:
+            return
+        self._audit.log(
+            {
+                "run_id": result.run_id,
+                "agent_name": self.agent_name,
+                "user_id": user_id,
+                "provider": self.provider,
+                "model": self.model,
+                "start_time": start.isoformat(),
+                "end_time": datetime.now(timezone.utc).isoformat(),
+                "total_tokens": result.total_tokens,
+                "cost_usd": result.cost_usd,
+                "nodes_traversed": result.nodes_traversed,
+                "status": result.status,
+                "error": result.error,
+            }
+        )
 
 
 # --- helpers ---
 
 
 def _load_system_prompt(config: dict[str, Any]) -> str | None:
-    """Resolve a system prompt from an inline string or a file path."""
     if config.get("system_prompt"):
         return str(config["system_prompt"])
     prompt_file = config.get("system_prompt_file")
@@ -119,19 +180,8 @@ def _load_system_prompt(config: dict[str, Any]) -> str | None:
 
 
 def _final_text(messages: list[Any]) -> str:
-    """Return the content of the last AI message."""
     for msg in reversed(messages):
         if isinstance(msg, AIMessage):
             content = msg.content
             return content if isinstance(content, str) else str(content)
     return ""
-
-
-def _count_tokens(messages: list[Any]) -> int:
-    """Sum total tokens across all messages that report usage metadata."""
-    total = 0
-    for msg in messages:
-        usage = getattr(msg, "usage_metadata", None)
-        if usage:
-            total += usage.get("total_tokens", 0)
-    return total

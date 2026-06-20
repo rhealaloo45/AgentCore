@@ -1,9 +1,10 @@
-"""ProviderFactory — turns a config ``model:`` block into a LangChain chat model.
+"""ProviderFactory — resolves a config ``model:`` block to a LangChain chat model.
 
-Phase 1 ships **Azure OpenAI only**. Phase 2 generalizes this into the full
-provider abstraction (OpenAI, Gemini, Anthropic, Ollama, custom ``register()``).
-The public surface — ``ProviderFactory.get_llm(config)`` — stays stable across that
-change, so nothing downstream needs to move.
+Five built-in providers (azure_openai, openai, gemini, anthropic, ollama) plus a
+plugin registry: ``ProviderFactory.register(name, provider)`` adds any
+``BaseProvider``. Registered providers are checked **before** built-ins, so a user
+can override a built-in if they want. Adapter SDKs are imported lazily, so a missing
+optional package only errors if that provider is actually used.
 """
 
 from __future__ import annotations
@@ -12,45 +13,15 @@ from typing import Any
 
 from langchain_core.language_models import BaseChatModel
 
-_BUILTINS = ("azure_openai",)
+from roscoe.llm.base_provider import BaseProvider
+from roscoe.llm.capability_map import get_capabilities
 
 
-class ProviderFactory:
-    """Resolves a ``model:`` config block to a ``BaseChatModel``."""
-
-    @classmethod
-    def get_llm(cls, config: dict[str, Any]) -> BaseChatModel:
-        """Build a chat model from the config's ``model`` block.
-
-        Args:
-            config: The ``model:`` mapping from agent_config.yaml. Must contain a
-                ``provider`` key.
-
-        Raises:
-            ValueError: If ``provider`` is missing or not supported in this phase.
-        """
-        provider = config.get("provider")
-        if not provider:
-            raise ValueError("model config is missing required key 'provider'.")
-
-        if provider == "azure_openai":
-            return cls._azure_openai(config)
-
-        raise ValueError(
-            f"Unknown provider '{provider}'. Built-in providers: {', '.join(_BUILTINS)}. "
-            f"(More providers + ProviderFactory.register() arrive in Phase 2.)"
-        )
-
-    @staticmethod
-    def _azure_openai(config: dict[str, Any]) -> BaseChatModel:
+class _AzureOpenAIProvider(BaseProvider):
+    def get_llm(self, config: dict[str, Any]) -> BaseChatModel:
         from langchain_openai import AzureChatOpenAI
 
-        missing = [k for k in ("deployment", "endpoint", "api_key") if not config.get(k)]
-        if missing:
-            raise ValueError(
-                f"azure_openai config missing required keys: {', '.join(missing)}."
-            )
-
+        _require(config, "azure_openai", "deployment", "endpoint", "api_key")
         return AzureChatOpenAI(
             azure_deployment=config["deployment"],
             azure_endpoint=config["endpoint"],
@@ -58,4 +29,132 @@ class ProviderFactory:
             api_version=config.get("api_version", "2024-06-01"),
             temperature=config.get("temperature", 0.1),
             max_tokens=config.get("max_tokens"),
+        )
+
+    def capabilities(self) -> dict[str, bool]:
+        return get_capabilities("azure_openai")
+
+
+class _OpenAIProvider(BaseProvider):
+    def get_llm(self, config: dict[str, Any]) -> BaseChatModel:
+        from langchain_openai import ChatOpenAI
+
+        _require(config, "openai", "model", "api_key")
+        return ChatOpenAI(
+            model=config["model"],
+            api_key=config["api_key"],
+            base_url=config.get("base_url"),
+            temperature=config.get("temperature", 0.1),
+            max_tokens=config.get("max_tokens"),
+        )
+
+    def capabilities(self) -> dict[str, bool]:
+        return get_capabilities("openai")
+
+
+class _GeminiProvider(BaseProvider):
+    def get_llm(self, config: dict[str, Any]) -> BaseChatModel:
+        from langchain_google_genai import ChatGoogleGenerativeAI
+
+        _require(config, "gemini", "model", "api_key")
+        return ChatGoogleGenerativeAI(
+            model=config["model"],
+            google_api_key=config["api_key"],
+            temperature=config.get("temperature", 0.1),
+            max_output_tokens=config.get("max_tokens"),
+        )
+
+    def capabilities(self) -> dict[str, bool]:
+        return get_capabilities("gemini")
+
+
+class _AnthropicProvider(BaseProvider):
+    def get_llm(self, config: dict[str, Any]) -> BaseChatModel:
+        from langchain_anthropic import ChatAnthropic
+
+        _require(config, "anthropic", "model", "api_key")
+        return ChatAnthropic(
+            model=config["model"],
+            api_key=config["api_key"],
+            temperature=config.get("temperature", 0.1),
+            max_tokens=config.get("max_tokens", 1024),
+        )
+
+    def capabilities(self) -> dict[str, bool]:
+        return get_capabilities("anthropic")
+
+
+class _OllamaProvider(BaseProvider):
+    def get_llm(self, config: dict[str, Any]) -> BaseChatModel:
+        from langchain_ollama import ChatOllama
+
+        _require(config, "ollama", "model")
+        return ChatOllama(
+            model=config["model"],
+            base_url=config.get("base_url", "http://localhost:11434"),
+            temperature=config.get("temperature", 0.1),
+        )
+
+    def capabilities(self) -> dict[str, bool]:
+        return get_capabilities("ollama")
+
+
+_BUILTINS: dict[str, BaseProvider] = {
+    "azure_openai": _AzureOpenAIProvider(),
+    "openai": _OpenAIProvider(),
+    "gemini": _GeminiProvider(),
+    "anthropic": _AnthropicProvider(),
+    "ollama": _OllamaProvider(),
+}
+
+
+class ProviderFactory:
+    """Resolves providers; supports custom registration."""
+
+    _registry: dict[str, BaseProvider] = {}
+
+    @classmethod
+    def register(cls, name: str, provider: BaseProvider) -> None:
+        """Register a custom ``BaseProvider`` under ``name`` (process lifetime).
+
+        Custom names take priority over built-ins with the same name.
+        """
+        if not isinstance(provider, BaseProvider):
+            raise TypeError(
+                f"provider must be a BaseProvider instance, got {type(provider).__name__}."
+            )
+        cls._registry[name] = provider
+
+    @classmethod
+    def get_provider(cls, name: str) -> BaseProvider:
+        """Return the provider for ``name`` (registry first, then built-ins)."""
+        if name in cls._registry:
+            return cls._registry[name]
+        if name in _BUILTINS:
+            return _BUILTINS[name]
+        raise ValueError(
+            f"Unknown provider '{name}'. Built-in providers: "
+            f"{', '.join(sorted(_BUILTINS))}. To add your own, implement BaseProvider "
+            f"and call ProviderFactory.register('{name}', YourProvider())."
+        )
+
+    @classmethod
+    def get_llm(cls, config: dict[str, Any]) -> BaseChatModel:
+        """Build a chat model from the config's ``model`` block."""
+        provider = config.get("provider")
+        if not provider:
+            raise ValueError("model config is missing required key 'provider'.")
+        return cls.get_provider(provider).get_llm(config)
+
+    @classmethod
+    def capabilities(cls, name: str) -> dict[str, bool]:
+        """Capability flags for a provider (registry-aware)."""
+        return cls.get_provider(name).capabilities()
+
+
+def _require(config: dict[str, Any], provider: str, *keys: str) -> None:
+    missing = [k for k in keys if not config.get(k)]
+    if missing:
+        raise ValueError(
+            f"{provider} config missing required keys: {', '.join(missing)}."
         )
