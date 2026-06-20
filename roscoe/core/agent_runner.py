@@ -18,12 +18,14 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 from uuid import uuid4
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.prebuilt import create_react_agent
 
 from roscoe.config.loader import load_config
 from roscoe.core.agent_result import AgentResult
 from roscoe.llm.provider_factory import ProviderFactory
+from roscoe.memory.conversation import ConversationMemory
+from roscoe.memory.persistent import PersistentMemory
 from roscoe.middleware.audit_logger import get_audit_logger
 from roscoe.middleware.cost_tracker import calculate_cost, sum_usage
 from roscoe.middleware.rate_limiter import RateLimiter
@@ -43,6 +45,8 @@ class AgentRunner:
         model: str,
         middleware: dict[str, Any],
         rate_limiter: RateLimiter,
+        conversation: ConversationMemory | None = None,
+        persistent: PersistentMemory | None = None,
     ) -> None:
         self.config = config
         self._graph = graph
@@ -51,6 +55,8 @@ class AgentRunner:
         self.model = model
         self._mw = middleware
         self._rate_limiter = rate_limiter
+        self._conversation = conversation
+        self._persistent = persistent
         self._audit = get_audit_logger()
 
     # --- construction ---
@@ -91,6 +97,8 @@ class AgentRunner:
         rate_limiter = RateLimiter()
         rate_limiter.configure(provider, middleware.get("rate_limiter"))
 
+        conversation, persistent = _build_memory(config.get("memory", {}) or {})
+
         return cls(
             config=config,
             graph=graph,
@@ -99,30 +107,41 @@ class AgentRunner:
             model=model_cfg.get("deployment") or model_cfg.get("model", ""),
             middleware=middleware,
             rate_limiter=rate_limiter,
+            conversation=conversation,
+            persistent=persistent,
         )
 
     # --- execution ---
 
-    async def arun(self, user_input: str, *, user_id: str | None = None) -> AgentResult:
+    async def arun(
+        self,
+        user_input: str,
+        *,
+        user_id: str | None = None,
+        session_id: str | None = None,
+    ) -> AgentResult:
         run_id = str(uuid4())
         start = datetime.now(timezone.utc)
 
         await self._rate_limiter.acquire(self.provider)
 
+        human = HumanMessage(content=user_input)
+        input_messages = self._build_input(human, user_id, session_id)
+
         try:
-            state = await self._graph.ainvoke(
-                {"messages": [HumanMessage(content=user_input)]}
-            )
+            state = await self._graph.ainvoke({"messages": input_messages})
             messages = state.get("messages", [])
             inp, out, total = sum_usage(messages)
-            cost = self._cost(inp, out)
+            output = _final_text(messages)
             result = AgentResult(
-                output=_final_text(messages),
+                output=output,
                 run_id=run_id,
                 total_tokens=total,
-                cost_usd=cost,
+                cost_usd=self._cost(inp, out),
                 status="success",
             )
+            if self._conversation is not None and session_id is not None:
+                self._conversation.add(session_id, human, AIMessage(content=output))
         except Exception as exc:  # noqa: BLE001 — surface any failure as a result
             result = AgentResult(
                 output="",
@@ -134,8 +153,33 @@ class AgentRunner:
         self._write_audit(result, user_id, start)
         return result
 
-    def run(self, user_input: str, *, user_id: str | None = None) -> AgentResult:
-        return asyncio.run(self.arun(user_input, user_id=user_id))
+    def run(
+        self,
+        user_input: str,
+        *,
+        user_id: str | None = None,
+        session_id: str | None = None,
+    ) -> AgentResult:
+        return asyncio.run(
+            self.arun(user_input, user_id=user_id, session_id=session_id)
+        )
+
+    def _build_input(
+        self, human: HumanMessage, user_id: str | None, session_id: str | None
+    ) -> list[Any]:
+        """Assemble the input message list: facts + history + the new turn."""
+        messages: list[Any] = []
+        # Persistent facts -> a system note loaded into context.
+        if self._persistent is not None and user_id is not None:
+            facts = self._persistent.all(user_id)
+            if facts:
+                rendered = "; ".join(f"{k}={v}" for k, v in facts.items())
+                messages.append(SystemMessage(content=f"Known facts: {rendered}"))
+        # Conversation history for this session.
+        if self._conversation is not None and session_id is not None:
+            messages.extend(self._conversation.get(session_id))
+        messages.append(human)
+        return messages
 
     # --- middleware helpers ---
 
@@ -168,6 +212,26 @@ class AgentRunner:
 
 
 # --- helpers ---
+
+
+def _build_memory(
+    memory_cfg: dict[str, Any],
+) -> tuple[ConversationMemory | None, PersistentMemory | None]:
+    """Build conversation + persistent memory from the ``memory:`` config block."""
+    conversation = None
+    conv_cfg = memory_cfg.get("conversation", {}) or {}
+    if conv_cfg.get("enabled"):
+        conversation = ConversationMemory(window_size=conv_cfg.get("window_size", 10))
+
+    persistent = None
+    pers_cfg = memory_cfg.get("persistent", {}) or {}
+    if pers_cfg.get("enabled"):
+        persistent = PersistentMemory(
+            backend=pers_cfg.get("backend", "sqlite"),
+            connection=pers_cfg.get("connection", ":memory:"),
+        )
+
+    return conversation, persistent
 
 
 def _load_system_prompt(config: dict[str, Any]) -> str | None:
