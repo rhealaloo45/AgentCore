@@ -3,10 +3,14 @@
 import httpx
 
 from roscoe.connectors import (
+    GitHubConnector,
     JiraConnector,
+    NotionConnector,
     OutlookConnector,
     RESTConnector,
     ServiceNowConnector,
+    SharePointConnector,
+    SnowflakeConnector,
 )
 
 
@@ -138,3 +142,149 @@ def test_outlook_missing_config_raises():
 
     with pytest.raises(ValueError):
         OutlookConnector({"client_id": "cid"})
+
+
+# --- SharePoint (Graph, shares OAuth2 base) ---
+
+
+def test_sharepoint_search_uses_token_and_drive_path():
+    def handler(request):
+        if request.url.host == "login.microsoftonline.com":
+            return _json({"access_token": "spt", "expires_in": 3600})
+        assert request.headers.get("authorization") == "Bearer spt"
+        assert request.url.path == "/v1.0/sites/SITE/drive/root/search(q='policy')"
+        return _json({"value": [{"name": "policy.docx"}]})
+
+    conn = SharePointConnector(
+        {
+            "client_id": "c",
+            "client_secret": "s",
+            "tenant_id": "t",
+            "site_id": "SITE",
+        },
+        transport=httpx.MockTransport(handler),
+    )
+    assert {t.name for t in conn.tools} == {
+        "search_documents",
+        "get_document",
+        "list_files",
+        "upload_file",
+    }
+    tool = next(t for t in conn.tools if t.name == "search_documents")
+    out = tool.invoke({"query": "policy"})
+    assert out["value"][0]["name"] == "policy.docx"
+
+
+# --- GitHub ---
+
+
+def test_github_get_issue():
+    seen = {}
+
+    def handler(request):
+        seen["path"] = request.url.path
+        seen["auth"] = request.headers.get("authorization")
+        seen["api_version"] = request.headers.get("x-github-api-version")
+        return _json({"number": 7, "title": "Bug"})
+
+    conn = GitHubConnector(
+        {"token": "ghp_x"}, transport=httpx.MockTransport(handler)
+    )
+    assert {t.name for t in conn.tools} == {
+        "get_issue",
+        "create_issue",
+        "search_issues",
+        "add_comment",
+        "get_file",
+        "list_repos",
+    }
+    tool = next(t for t in conn.tools if t.name == "get_issue")
+    out = tool.invoke({"repo": "rhealaloo45/roscoe", "number": 7})
+    assert out["number"] == 7
+    assert seen["path"] == "/repos/rhealaloo45/roscoe/issues/7"
+    assert seen["auth"] == "Bearer ghp_x"
+    assert seen["api_version"] == "2022-11-28"
+
+
+# --- Notion ---
+
+
+def test_notion_search_sends_version_header():
+    seen = {}
+
+    def handler(request):
+        seen["path"] = request.url.path
+        seen["version"] = request.headers.get("notion-version")
+        seen["auth"] = request.headers.get("authorization")
+        return _json({"results": [{"id": "page1"}]})
+
+    conn = NotionConnector(
+        {"token": "secret_x"}, transport=httpx.MockTransport(handler)
+    )
+    assert {t.name for t in conn.tools} == {
+        "search",
+        "get_page",
+        "create_page",
+        "query_database",
+        "append_block",
+    }
+    tool = next(t for t in conn.tools if t.name == "search")
+    out = tool.invoke({"query": "roadmap"})
+    assert out["results"][0]["id"] == "page1"
+    assert seen["path"] == "/v1/search"
+    assert seen["version"] == "2022-06-28"
+    assert seen["auth"] == "Bearer secret_x"
+
+
+# --- Snowflake (SQL, injected connection — no driver needed) ---
+
+
+class _FakeCursor:
+    description = [("ID",), ("NAME",)]
+
+    def execute(self, sql):
+        self.sql = sql
+
+    def fetchmany(self, n):
+        return [(1, "alpha"), (2, "beta")]
+
+    def close(self):
+        pass
+
+
+class _FakeConn:
+    def cursor(self):
+        return _FakeCursor()
+
+    def close(self):
+        pass
+
+
+def test_snowflake_run_query_returns_row_dicts():
+    conn = SnowflakeConnector(
+        {"account": "acct", "user": "u"}, connection=_FakeConn()
+    )
+    assert {t.name for t in conn.tools} == {
+        "run_query",
+        "list_tables",
+        "describe_table",
+    }
+    tool = next(t for t in conn.tools if t.name == "run_query")
+    rows = tool.invoke({"sql": "SELECT id, name FROM t"})
+    assert rows == [{"ID": 1, "NAME": "alpha"}, {"ID": 2, "NAME": "beta"}]
+
+
+def test_snowflake_missing_driver_message(monkeypatch):
+    import builtins
+    import pytest
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name.startswith("snowflake"):
+            raise ImportError("no driver")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    with pytest.raises(ImportError, match="roscoe\\[snowflake\\]"):
+        SnowflakeConnector({"account": "a", "user": "u"})  # no injected connection
