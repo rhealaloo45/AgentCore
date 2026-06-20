@@ -86,13 +86,18 @@ class AgentRunner:
             )
 
         llm = ProviderFactory.get_llm(model_cfg)
-        llm = apply_retry(llm, middleware.get("retry"), provider)
+        # Bind tools BEFORE applying retry. `with_retry` on a tool-bound model keeps
+        # the RunnableBinding outermost (so create_react_agent sees the tools and
+        # skips re-binding); retrying the raw model first yields a RunnableRetry with
+        # no `bind_tools`, which create_react_agent then fails to bind.
+        model: Any = llm.bind_tools(tool_list) if tool_list else llm
+        model = apply_retry(model, middleware.get("retry"), provider)
 
         system_prompt = _load_system_prompt(config)
         kwargs: dict[str, Any] = {}
         if system_prompt:
             kwargs["state_modifier"] = system_prompt
-        graph = create_react_agent(llm, tool_list, **kwargs)
+        graph = create_react_agent(model, tool_list, **kwargs)
 
         rate_limiter = RateLimiter()
         rate_limiter.configure(provider, middleware.get("rate_limiter"))

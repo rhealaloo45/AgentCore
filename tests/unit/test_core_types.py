@@ -48,3 +48,30 @@ def test_from_config_requires_model_block(tmp_path):
     cfg.write_text("agent_name: test-agent\n")
     with pytest.raises(ValueError):
         AgentRunner.from_config(cfg, tools=[])
+
+
+def test_from_config_builds_graph_with_tools_and_retry(tmp_path):
+    """Regression: tools + retry must build. Retry has to be applied *after*
+    bind_tools, else create_react_agent gets a RunnableRetry with no bind_tools
+    and raises AttributeError. Build only — no live LLM call."""
+    from roscoe.tools import tool
+
+    @tool
+    def add_numbers(a: int, b: int) -> int:
+        """Add two numbers."""
+        return a + b
+
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text(
+        "agent_name: test-agent\n"
+        "model:\n"
+        "  provider: openai\n"
+        "  model: gpt-4o-mini\n"
+        "  api_key: sk-fake\n"
+        "middleware:\n"
+        "  retry:\n"
+        "    max_attempts: 2\n"
+    )
+    agent = AgentRunner.from_config(cfg, tools=[add_numbers])
+    assert agent._graph is not None
+    assert agent.provider == "openai"
