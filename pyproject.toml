@@ -42,6 +42,9 @@ dev = [
 snowflake = ["snowflake-connector-python>=3.0,<4.0"]
 azure = ["azure-monitor-opentelemetry>=1.0,<2.0"]
 
+[project.scripts]
+roscoe = "roscoe.cli.main:cli"
+
 [project.urls]
 Homepage = "https://github.com/rhealaloo45/roscoe"
 Repository = "https://github.com/rhealaloo45/roscoe"
@@ -50,9 +53,14 @@ Issues = "https://github.com/rhealaloo45/roscoe/issues"
 [tool.setuptools.packages.find]
 include = ["roscoe*"]
 
-# Ship template config/prompt data files (the CLI copies these on `roscoe init`).
+# Ship template + scaffold data files (the CLI copies these on `roscoe init`).
 [tool.setuptools.package-data]
-roscoe = ["templates/**/*.yaml", "templates/**/*.txt"]
+roscoe = [
+    "templates/**/*.yaml",
+    "templates/**/*.txt",
+    "cli/scaffold/**/*",
+    "cli/scaffold/.env.example",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

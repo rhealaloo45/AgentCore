@@ -1,0 +1,14 @@
+{
+  "cases": [
+    {
+      "id": "weather-london",
+      "input": "What's the weather in London?",
+      "expected_tools": ["get_weather"]
+    },
+    {
+      "id": "greeting",
+      "input": "Hello, who are you?",
+      "expected_output": "A helpful assistant introduction."
+    }
+  ]
+}

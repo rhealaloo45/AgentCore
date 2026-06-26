@@ -1,0 +1,31 @@
+agent_name: __PROJECT_NAME__
+
+system_prompt_file: prompts/system.txt
+
+model:
+  provider: openai            # azure_openai | openai | gemini | anthropic | ollama
+  model: gpt-4o-mini
+  api_key: ${OPENAI_API_KEY}
+  temperature: 0.1
+
+memory:
+  conversation:
+    enabled: true
+    window_size: 10
+  persistent:
+    enabled: false
+    backend: sqlite
+    connection: ./facts.db
+
+middleware:
+  retry:
+    max_attempts: 3
+  rate_limiter:
+    rpm: 60
+  cost_tracking:
+    enabled: true
+  audit:
+    enabled: true
+  # Uncomment to require human approval before these tools run:
+  # human_approval:
+  #   require_approval_for: ["my_sensitive_tool"]
