@@ -50,10 +50,10 @@ def test_from_config_requires_model_block(tmp_path):
         AgentRunner.from_config(cfg, tools=[])
 
 
-def test_from_config_builds_graph_with_tools_and_retry(tmp_path):
+def test_from_config_builds_executor_with_tools_and_retry(tmp_path):
     """Regression: tools + retry must build. Retry has to be applied *after*
-    bind_tools, else create_react_agent gets a RunnableRetry with no bind_tools
-    and raises AttributeError. Build only — no live LLM call."""
+    bind_tools so the model handed to the executor stays tool-bound (a RunnableRetry
+    over the raw model would have no bind_tools). Build only — no live LLM call."""
     from roscoe.tools import tool
 
     @tool
@@ -73,5 +73,6 @@ def test_from_config_builds_graph_with_tools_and_retry(tmp_path):
         "    max_attempts: 2\n"
     )
     agent = AgentRunner.from_config(cfg, tools=[add_numbers])
-    assert agent._graph is not None
+    assert agent._executor is not None
+    assert "add_numbers" in agent._executor._tools
     assert agent.provider == "openai"

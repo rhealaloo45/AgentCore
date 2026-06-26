@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "rhealaloo", email = "rhealaloo@gmail.com" }]
-keywords = ["langchain", "langgraph", "agents", "llm", "sdk"]
+keywords = ["langchain", "agents", "llm", "sdk", "react"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "License :: OSI Approved :: MIT License",
@@ -18,12 +18,12 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 
-# Dependency pinning rule: pin langchain + langgraph exactly (they break on minor
-# bumps); let langchain-core and the provider adapters float within compatible ranges
-# so the resolver stays solvable. A committed lockfile pins the rest (added at Phase 11).
+# Dependency pinning rule: pin langchain exactly (it breaks on minor bumps); let
+# langchain-core and the provider adapters float within compatible ranges so the
+# resolver stays solvable. A committed lockfile pins the rest (added at Phase 11).
+# NOTE: roscoe runs its own ReAct loop (roscoe.core.executor) — no langgraph dependency.
 dependencies = [
     "langchain==0.3.25",
-    "langgraph==0.2.60",
     "langchain-openai>=0.2,<0.4",
     "langchain-google-genai>=2.0,<3.0",
     "langchain-anthropic>=0.3,<0.4",

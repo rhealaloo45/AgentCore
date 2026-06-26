@@ -1,19 +1,18 @@
-"""Base agent state schema for LangGraph graphs."""
+"""Base agent state schema.
+
+roscoe runs its own ReAct loop (see ``roscoe.core.executor``) rather than a LangGraph
+graph, so the message list is managed explicitly — no reducer needed. This TypedDict is
+kept for typing the message channel that flows through the loop.
+"""
 
 from __future__ import annotations
 
-from typing import Annotated, TypedDict
+from typing import TypedDict
 
 from langchain_core.messages import BaseMessage
-from langgraph.graph.message import add_messages
 
 
 class AgentState(TypedDict):
-    """Minimal LangGraph state: an accumulating list of messages.
+    """Minimal agent state: the running list of messages for the tool-calling loop."""
 
-    The ``add_messages`` reducer appends new messages instead of overwriting,
-    which is what the tool-calling loop needs. Subclasses can add fields (retrieved
-    docs, scratchpad, etc.) while keeping ``messages``.
-    """
-
-    messages: Annotated[list[BaseMessage], add_messages]
+    messages: list[BaseMessage]
