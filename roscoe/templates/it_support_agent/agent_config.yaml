@@ -1,0 +1,32 @@
+agent_name: it-support-agent
+
+system_prompt_file: prompts/system.txt
+
+model:
+  provider: openai
+  model: gpt-4o-mini
+  api_key: ${OPENAI_API_KEY}
+  temperature: 0.1
+
+connectors:
+  servicenow:
+    instance_url: ${SERVICENOW_INSTANCE_URL}
+    username: ${SERVICENOW_USERNAME}
+    password: ${SERVICENOW_PASSWORD}
+
+memory:
+  conversation:
+    enabled: true
+    window_size: 10
+
+middleware:
+  retry:
+    max_attempts: 3
+  rate_limiter:
+    rpm: 60
+  cost_tracking:
+    enabled: true
+  audit:
+    enabled: true
+  human_approval:
+    require_approval_for: ["create_ticket", "escalate_ticket"]

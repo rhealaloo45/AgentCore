@@ -1,0 +1,26 @@
+agent_name: legal-agent
+
+system_prompt_file: prompts/system.txt
+
+model:
+  provider: openai
+  model: gpt-4o-mini
+  api_key: ${OPENAI_API_KEY}
+  temperature: 0.0           # legal work: keep it deterministic
+
+# Contract store is built in code via KnowledgeMemory (FAISS with embeddings, or the
+# keyword retriever for local dev). SharePoint becomes the source at v0.2.0.
+memory:
+  conversation:
+    enabled: true
+    window_size: 10
+
+middleware:
+  retry:
+    max_attempts: 3
+  rate_limiter:
+    rpm: 60
+  cost_tracking:
+    enabled: true
+  audit:
+    enabled: true

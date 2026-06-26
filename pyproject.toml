@@ -50,6 +50,10 @@ Issues = "https://github.com/rhealaloo45/roscoe/issues"
 [tool.setuptools.packages.find]
 include = ["roscoe*"]
 
+# Ship template config/prompt data files (the CLI copies these on `roscoe init`).
+[tool.setuptools.package-data]
+roscoe = ["templates/**/*.yaml", "templates/**/*.txt"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

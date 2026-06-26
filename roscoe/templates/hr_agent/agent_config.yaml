@@ -1,0 +1,37 @@
+agent_name: hr-agent
+
+system_prompt_file: prompts/system.txt
+
+model:
+  provider: openai            # swap provider freely; only this block changes
+  model: gpt-4o-mini
+  api_key: ${OPENAI_API_KEY}
+  temperature: 0.1
+
+# The HR system REST API the tools talk to (built in code via RESTConnector).
+connectors:
+  rest_api:
+    base_url: ${HR_API_BASE_URL}
+    auth: bearer
+    token: ${HR_API_TOKEN}
+
+memory:
+  conversation:
+    enabled: true
+    window_size: 10
+  persistent:
+    enabled: true
+    backend: sqlite
+    connection: ./hr_facts.db
+
+middleware:
+  retry:
+    max_attempts: 3
+  rate_limiter:
+    rpm: 60
+  cost_tracking:
+    enabled: true
+  audit:
+    enabled: true
+  human_approval:
+    require_approval_for: ["submit_leave_request", "update_personal_details"]

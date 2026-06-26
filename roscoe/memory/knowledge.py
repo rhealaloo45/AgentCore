@@ -35,21 +35,29 @@ class KnowledgeMemory:
         embeddings: Any | None = None,
         top_k: int = 3,
         score_threshold: float = 0.0,
+        metadatas: list[dict[str, Any]] | None = None,
         **vector_kwargs: Any,
     ) -> "KnowledgeMemory":
         """Build from raw texts.
 
         With ``embeddings`` -> a FAISS vector store. Without -> a keyword retriever
-        (no ML deps), suitable for local dev and tests.
+        (no ML deps), suitable for local dev and tests. ``metadatas`` (e.g. a per-text
+        ``{"source": "policy.pdf"}``) is carried onto the documents so callers can cite
+        the source of a retrieved chunk.
         """
         if embeddings is not None:
             from langchain_community.vectorstores import FAISS
 
-            store = FAISS.from_texts(texts, embeddings, **vector_kwargs)
+            store = FAISS.from_texts(
+                texts, embeddings, metadatas=metadatas, **vector_kwargs
+            )
             retriever = store.as_retriever(search_kwargs={"k": top_k})
             return cls(retriever, top_k=top_k, score_threshold=score_threshold)
+
+        metas = metadatas or [{} for _ in texts]
+        docs = [Document(page_content=t, metadata=dict(m)) for t, m in zip(texts, metas)]
         return cls(
-            _KeywordRetriever([Document(page_content=t) for t in texts]),
+            _KeywordRetriever(docs),
             top_k=top_k,
             score_threshold=score_threshold,
         )
