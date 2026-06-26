@@ -21,6 +21,8 @@ class AgentResult:
             human approval, see Phase 6).
         pending_action: When ``status == "paused"``, the intercepted tool call
             awaiting approval; otherwise ``None``.
+        tool_calls: Ordered names of tools the agent invoked during the run. Used by
+            the Phase 8 tool-usage scorer.
         nodes_traversed: Ordered names of graph nodes visited during the run.
     """
 
@@ -31,4 +33,5 @@ class AgentResult:
     error: str | None = None
     status: str = "success"
     pending_action: dict[str, Any] | None = None
+    tool_calls: list[str] = field(default_factory=list)
     nodes_traversed: list[str] = field(default_factory=list)

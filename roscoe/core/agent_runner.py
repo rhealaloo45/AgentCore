@@ -259,7 +259,12 @@ class AgentRunner:
         else:
             output = _final_text(exec_result.messages)
             result = AgentResult(
-                output=output, run_id=run_id, total_tokens=total, cost_usd=cost, status="success"
+                output=output,
+                run_id=run_id,
+                total_tokens=total,
+                cost_usd=cost,
+                status="success",
+                tool_calls=_tool_names(exec_result.messages),
             )
             if self._conversation is not None and session_id is not None and human is not None:
                 self._conversation.add(session_id, human, AIMessage(content=output))
@@ -359,3 +364,12 @@ def _final_text(messages: list[Any]) -> str:
             content = msg.content
             return content if isinstance(content, str) else str(content)
     return ""
+
+
+def _tool_names(messages: list[Any]) -> list[str]:
+    """Ordered names of every tool the agent called across the run."""
+    names: list[str] = []
+    for msg in messages:
+        for call in getattr(msg, "tool_calls", None) or []:
+            names.append(call["name"])
+    return names
