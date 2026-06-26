@@ -75,6 +75,42 @@ agent = AgentRunner.from_config("agent_config.yaml", tools=build_tools(knowledge
 if __name__ == "__main__":
     print(agent.run("What does the liability clause say?").output)
 ''',
+    "knowledge_base_agent": '''"""Entry point for the knowledge-base agent. Run: python main.py"""
+
+import os
+
+from roscoe import AgentRunner
+from roscoe.connectors import NotionConnector
+
+from tools.kb_tools import build_tools
+
+# Wire whichever sources you have. Add SharePointConnector / KnowledgeMemory as needed.
+notion = NotionConnector({"token": os.environ["NOTION_TOKEN"]})
+agent = AgentRunner.from_config("agent_config.yaml", tools=build_tools(notion=notion))
+
+if __name__ == "__main__":
+    print(agent.run("What is our remote-work policy?").output)
+''',
+    "exec_assistant_agent": '''"""Entry point for the executive assistant. Run: python main.py"""
+
+import os
+
+from roscoe import AgentRunner
+from roscoe.connectors import OutlookConnector
+
+from tools.exec_tools import build_tools
+
+outlook = OutlookConnector(
+    {"client_id": os.environ["MS_CLIENT_ID"],
+     "client_secret": os.environ["MS_CLIENT_SECRET"],
+     "tenant_id": os.environ["MS_TENANT_ID"],
+     "mailbox": os.environ["MS_MAILBOX"]}
+)
+agent = AgentRunner.from_config("agent_config.yaml", tools=build_tools(outlook))
+
+if __name__ == "__main__":
+    print(agent.run("Summarize my unread emails.").output)
+''',
 }
 
 _TEMPLATE_ENV = {
@@ -84,6 +120,15 @@ _TEMPLATE_ENV = {
         "SERVICENOW_USERNAME=\nSERVICENOW_PASSWORD=\n"
     ),
     "legal_agent": "OPENAI_API_KEY=\n",
+    "knowledge_base_agent": (
+        "OPENAI_API_KEY=\nNOTION_TOKEN=\n"
+        "# SharePoint (optional):\n# MS_CLIENT_ID=\n# MS_CLIENT_SECRET=\n"
+        "# MS_TENANT_ID=\n# SP_SITE_ID=\n"
+    ),
+    "exec_assistant_agent": (
+        "OPENAI_API_KEY=\nMS_CLIENT_ID=\nMS_CLIENT_SECRET=\n"
+        "MS_TENANT_ID=\nMS_MAILBOX=\n"
+    ),
 }
 
 _EXAMPLE_CASES = {

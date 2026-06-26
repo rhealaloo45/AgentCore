@@ -13,7 +13,13 @@ from pathlib import Path
 TEMPLATES_DIR = Path(__file__).parent
 
 #: Templates shipped with roscoe v0.1.0.
-AVAILABLE = ["hr_agent", "it_support_agent", "legal_agent"]
+AVAILABLE = [
+    "hr_agent",
+    "it_support_agent",
+    "legal_agent",
+    "knowledge_base_agent",
+    "exec_assistant_agent",
+]
 
 
 def available_templates() -> list[str]:

@@ -7,11 +7,18 @@ live HR API, ServiceNow, or LLM is needed.
 import httpx
 import pytest
 
-from roscoe.connectors import RESTConnector, ServiceNowConnector
+from roscoe.connectors import (
+    NotionConnector,
+    OutlookConnector,
+    RESTConnector,
+    ServiceNowConnector,
+)
 from roscoe.memory.knowledge import KnowledgeMemory
 from roscoe.templates import available_templates, template_path
+from roscoe.templates.exec_assistant_agent.tools.exec_tools import build_tools as build_exec_tools
 from roscoe.templates.hr_agent.tools.hr_tools import build_tools as build_hr_tools
 from roscoe.templates.it_support_agent.tools.it_tools import build_tools as build_it_tools
+from roscoe.templates.knowledge_base_agent.tools.kb_tools import build_tools as build_kb_tools
 from roscoe.templates.legal_agent.tools.legal_tools import build_tools as build_legal_tools
 
 
@@ -24,7 +31,13 @@ def _json(payload, status=200):
 
 def test_available_templates_and_files_exist():
     names = available_templates()
-    assert set(names) == {"hr_agent", "it_support_agent", "legal_agent"}
+    assert set(names) == {
+        "hr_agent",
+        "it_support_agent",
+        "legal_agent",
+        "knowledge_base_agent",
+        "exec_assistant_agent",
+    }
     for name in names:
         d = template_path(name)
         assert (d / "agent_config.yaml").exists()
@@ -121,3 +134,59 @@ def test_legal_extract_clause_cites_source():
     assert out["found"]
     assert "liability" in out["text"].lower()
     assert out["source"] == "msa_acme.pdf"
+
+
+# --- Knowledge-base template (Notion + knowledge) ---
+
+
+def test_kb_requires_a_source():
+    with pytest.raises(ValueError):
+        build_kb_tools()
+
+
+def test_kb_knowledge_search_cites_source():
+    km = KnowledgeMemory.from_texts(
+        ["Remote work is allowed up to 3 days per week."],
+        metadatas=[{"source": "remote_policy"}],
+    )
+    tools = build_kb_tools(knowledge=km)
+    search = next(t for t in tools if t.name == "search_knowledge")
+    hits = search.invoke({"query": "remote work days"})
+    assert hits[0]["source"] == "remote_policy"
+
+
+def test_kb_includes_notion_read_tools():
+    def handler(request):
+        return _json({"results": [{"id": "p1"}]})
+
+    notion = NotionConnector({"token": "secret"}, transport=httpx.MockTransport(handler))
+    tools = build_kb_tools(notion=notion)
+    names = {t.name for t in tools}
+    assert names == {"search", "get_page"}  # read-only subset, no create/append
+    search = next(t for t in tools if t.name == "search")
+    assert search.invoke({"query": "policy"})["results"][0]["id"] == "p1"
+
+
+# --- Executive assistant template (Outlook) ---
+
+
+def test_exec_assistant_sends_email_via_outlook():
+    def handler(request):
+        if request.url.host == "login.microsoftonline.com":
+            return _json({"access_token": "tok", "expires_in": 3600})
+        assert request.headers.get("authorization") == "Bearer tok"
+        return _json({"status": "sent"})
+
+    outlook = OutlookConnector(
+        {"client_id": "c", "client_secret": "s", "tenant_id": "t", "mailbox": "exec@org.com"},
+        transport=httpx.MockTransport(handler),
+    )
+    tools = build_exec_tools(outlook)
+    assert {t.name for t in tools} == {
+        "send_email",
+        "read_emails",
+        "create_calendar_event",
+        "get_availability",
+    }
+    send = next(t for t in tools if t.name == "send_email")
+    assert send.invoke({"to": "x@y.com", "subject": "Hi", "body": "Hello"}) == {"status": "sent"}
