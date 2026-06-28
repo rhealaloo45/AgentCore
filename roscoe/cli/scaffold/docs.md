@@ -1,5 +1,7 @@
 # roscoe — Developer Guide
 
+> **R**eady-to-run **O**rchestration **S**DK — **C**onfigurable, **O**bservable, **E**xtensible
+
 Everything you need to build, run, and operate your agent. Copy-paste the snippets
 directly — they all work with the scaffolded project structure.
 

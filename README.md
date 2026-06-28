@@ -1,6 +1,6 @@
 # roscoe
 
-> Provider-agnostic AI agent SDK — production-ready from line one.
+> **R**eady-to-run **O**rchestration **S**DK — **C**onfigurable, **O**bservable, **E**xtensible
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org)
