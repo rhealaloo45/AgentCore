@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from roscoe.connectors import (
+    GoogleWorkspaceConnector,
     NotionConnector,
     OutlookConnector,
     RESTConnector,
@@ -16,6 +17,7 @@ from roscoe.connectors import (
 from roscoe.memory.knowledge import KnowledgeMemory
 from roscoe.templates import available_templates, template_path
 from roscoe.templates.exec_assistant_agent.tools.exec_tools import build_tools as build_exec_tools
+from roscoe.templates.google_workspace_agent.tools.gws_tools import build_tools as build_gws_tools
 from roscoe.templates.hr_agent.tools.hr_tools import build_tools as build_hr_tools
 from roscoe.templates.it_support_agent.tools.it_tools import build_tools as build_it_tools
 from roscoe.templates.knowledge_base_agent.tools.kb_tools import build_tools as build_kb_tools
@@ -37,6 +39,7 @@ def test_available_templates_and_files_exist():
         "legal_agent",
         "knowledge_base_agent",
         "exec_assistant_agent",
+        "google_workspace_agent",
     }
     for name in names:
         d = template_path(name)
@@ -190,3 +193,72 @@ def test_exec_assistant_sends_email_via_outlook():
     }
     send = next(t for t in tools if t.name == "send_email")
     assert send.invoke({"to": "x@y.com", "subject": "Hi", "body": "Hello"}) == {"status": "sent"}
+
+
+# --- Google Workspace template (Gmail + Calendar + Tasks + Drive) ---
+
+
+def _google_handler(request):
+    """Mock handler for Google APIs — returns minimal valid responses."""
+    url = str(request.url)
+    if "oauth2" in url or "token" in url:
+        return _json({"access_token": "goog_tok", "expires_in": 3600})
+    if "messages/send" in url:
+        return _json({"id": "msg_1", "labelIds": ["SENT"]})
+    if "/messages" in url:
+        return _json({"messages": [{"id": "msg_1"}]})
+    if "/events" in url and request.method == "POST":
+        return _json({"id": "evt_1", "status": "confirmed"})
+    if "/events" in url:
+        return _json({"items": [{"id": "evt_1", "summary": "Standup"}]})
+    if "/tasks" in url and request.method == "POST":
+        return _json({"id": "task_1", "title": "Review PR"})
+    if "/tasks" in url:
+        return _json({"items": [{"id": "task_1"}]})
+    if "/files" in url:
+        return _json({"files": [{"id": "f1", "name": "report.pdf"}]})
+    return _json({"ok": True})
+
+
+def _make_google_connector(tmp_path):
+    import json as _json_mod
+    sa_file = tmp_path / "sa.json"
+    sa_file.write_text(_json_mod.dumps({
+        "client_email": "test@test.iam.gserviceaccount.com",
+        "private_key": "fake",
+        "token_uri": "https://oauth2.googleapis.com/token",
+    }))
+    return GoogleWorkspaceConnector(
+        {"credentials_file": str(sa_file), "subject": "user@example.com"},
+        transport=httpx.MockTransport(_google_handler),
+    )
+
+
+def test_google_workspace_tools_present(tmp_path):
+    gws = _make_google_connector(tmp_path)
+    tools = build_gws_tools(gws)
+    assert {t.name for t in tools} == {
+        "send_email",
+        "read_emails",
+        "list_events",
+        "create_event",
+        "list_tasks",
+        "create_task",
+        "search_drive",
+    }
+
+
+def test_google_workspace_read_emails(tmp_path):
+    gws = _make_google_connector(tmp_path)
+    tools = build_gws_tools(gws)
+    read = next(t for t in tools if t.name == "read_emails")
+    out = read.invoke({"max_results": 5})
+    assert "messages" in out
+
+
+def test_google_workspace_search_drive(tmp_path):
+    gws = _make_google_connector(tmp_path)
+    tools = build_gws_tools(gws)
+    search = next(t for t in tools if t.name == "search_drive")
+    out = search.invoke({"query": "name contains 'report'"})
+    assert out["files"][0]["name"] == "report.pdf"

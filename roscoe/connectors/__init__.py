@@ -1,11 +1,13 @@
 """Connectors subpackage — pre-built tool collections for enterprise systems.
 
-REST (generic), Jira, ServiceNow, Outlook, SharePoint, GitHub, Notion are HTTP-based.
+REST (generic), Jira, ServiceNow, Outlook, SharePoint, GitHub, Notion,
+Google Workspace are HTTP-based.
 Snowflake is SQL-based (optional driver: `pip install "roscoe[snowflake]"`).
 """
 
 from roscoe.connectors.base_connector import BaseConnector
 from roscoe.connectors.github import GitHubConnector
+from roscoe.connectors.google_workspace import GoogleWorkspaceConnector
 from roscoe.connectors.jira import JiraConnector
 from roscoe.connectors.notion import NotionConnector
 from roscoe.connectors.outlook import OutlookConnector
@@ -23,5 +25,6 @@ __all__ = [
     "SharePointConnector",
     "GitHubConnector",
     "NotionConnector",
+    "GoogleWorkspaceConnector",
     "SnowflakeConnector",
 ]

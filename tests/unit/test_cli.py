@@ -35,12 +35,71 @@ def test_scaffold_existing_dir_raises(tmp_path):
 def test_init_command_blank():
     runner = CliRunner()
     with runner.isolated_filesystem():
-        result = runner.invoke(cli, ["init", "blank_bot"])
+        result = runner.invoke(cli, ["init", "blank_bot", "--quick"])
         assert result.exit_code == 0, result.output
         assert "Created blank project" in result.output
         from pathlib import Path
 
         assert Path("blank_bot/main.py").exists()
+
+
+def test_init_command_wizard():
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        # Simulate wizard: provider=1 (openai), model=default, temp=default,
+        # no custom endpoint, all middleware yes (defaults), memory defaults
+        inputs = "\n".join([
+            "1",           # provider: openai
+            "",            # model: default (gpt-4o-mini)
+            "",            # temperature: default (0.1)
+            "n",           # custom endpoint? no
+            "y",           # cost tracking
+            "y",           # rate limiting
+            "60",          # rpm
+            "y",           # retry
+            "3",           # retry attempts
+            "y",           # audit
+            "n",           # human approval? no
+            "y",           # conversation memory
+            "10",          # window size
+            "n",           # persistent memory
+        ])
+        result = runner.invoke(cli, ["init", "wizard_bot", "--cli"], input=inputs)
+        assert result.exit_code == 0, result.output
+        assert "Created blank project" in result.output
+        from pathlib import Path
+
+        cfg = Path("wizard_bot/agent_config.yaml").read_text()
+        assert "provider: openai" in cfg
+        assert "gpt-4o-mini" in cfg
+
+
+def test_init_command_wizard_openrouter():
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        inputs = "\n".join([
+            "2",           # provider: openrouter
+            "",            # model: default
+            "",            # temperature: default
+            "y",           # cost tracking
+            "y",           # rate limiting
+            "60",          # rpm
+            "y",           # retry
+            "3",           # retry attempts
+            "y",           # audit
+            "n",           # human approval? no
+            "y",           # conversation memory
+            "10",          # window size
+            "n",           # persistent memory
+        ])
+        result = runner.invoke(cli, ["init", "or_bot", "--cli"], input=inputs)
+        assert result.exit_code == 0, result.output
+        from pathlib import Path
+
+        cfg = Path("or_bot/agent_config.yaml").read_text()
+        assert "provider: openai" in cfg
+        assert "openrouter.ai" in cfg
+        assert "OPENROUTER_API_KEY" in cfg
 
 
 # --- init: from template ---
@@ -57,6 +116,36 @@ def test_scaffold_from_template_hr(tmp_path):
     assert (dest / "evals" / "test_cases.json").exists()
     assert "build_tools" in (dest / "main.py").read_text()
     assert "HR_API_TOKEN" in (dest / ".env.example").read_text()
+
+
+def test_init_command_wizard_hitl():
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        inputs = "\n".join([
+            "1",           # provider: openai
+            "",            # model: default
+            "",            # temperature: default
+            "n",           # custom endpoint? no
+            "y",           # cost tracking
+            "y",           # rate limiting
+            "60",          # rpm
+            "y",           # retry
+            "3",           # retry attempts
+            "y",           # audit
+            "y",           # human approval? yes
+            "send_email, delete_record",  # tools
+            "y",           # conversation memory
+            "10",          # window size
+            "n",           # persistent memory
+        ])
+        result = runner.invoke(cli, ["init", "hitl_bot", "--cli"], input=inputs)
+        assert result.exit_code == 0, result.output
+        from pathlib import Path
+
+        cfg = Path("hitl_bot/agent_config.yaml").read_text()
+        assert "human_approval:" in cfg
+        assert "send_email" in cfg
+        assert "delete_record" in cfg
 
 
 def test_init_command_unknown_template():

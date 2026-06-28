@@ -19,6 +19,7 @@ AVAILABLE = [
     "legal_agent",
     "knowledge_base_agent",
     "exec_assistant_agent",
+    "google_workspace_agent",
 ]
 
 

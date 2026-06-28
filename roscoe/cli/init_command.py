@@ -5,6 +5,11 @@ Blank scaffold (default) copies ``cli/scaffold/`` and substitutes the project na
 project-level files a template doesn't carry (``main.py``, ``.env.example``,
 ``evals/test_cases.json``). No Jinja2 — a single ``__PROJECT_NAME__`` placeholder is
 enough, keeping the dependency surface small.
+
+Interactive wizard (blank projects only, skip with ``--quick``):
+    Prompts for provider, model, middleware toggles, and memory. Answers are written
+    into ``agent_config.yaml`` with all comments preserved — the user can always edit
+    the YAML later.
 """
 
 from __future__ import annotations
@@ -20,6 +25,15 @@ from roscoe.templates import available_templates, template_path
 SCAFFOLD_DIR = Path(__file__).parent / "scaffold"
 PLACEHOLDER = "__PROJECT_NAME__"
 _RENDER_SUFFIXES = {".yaml", ".yml", ".txt", ".py", ".md", ".json"}
+
+_PROVIDERS = {
+    "openai": {"env_key": "OPENAI_API_KEY", "default_model": "gpt-4o-mini", "base_url": None},
+    "openrouter": {"env_key": "OPENROUTER_API_KEY", "default_model": "meta-llama/llama-3.1-8b-instruct", "base_url": "https://openrouter.ai/api/v1"},
+    "azure_openai": {"env_key": "AZURE_OPENAI_KEY", "default_model": "gpt-4o", "base_url": None},
+    "anthropic": {"env_key": "ANTHROPIC_API_KEY", "default_model": "claude-sonnet-4-5", "base_url": None},
+    "gemini": {"env_key": "GOOGLE_API_KEY", "default_model": "gemini-1.5-pro", "base_url": None},
+    "ollama": {"env_key": None, "default_model": "llama3.1", "base_url": None},
+}
 
 # Per-template entry point: how to build that template's tools.
 _TEMPLATE_MAIN = {
@@ -111,6 +125,24 @@ agent = AgentRunner.from_config("agent_config.yaml", tools=build_tools(outlook))
 if __name__ == "__main__":
     print(agent.run("Summarize my unread emails.").output)
 ''',
+    "google_workspace_agent": '''"""Entry point for the Google Workspace agent. Run: python main.py"""
+
+import os
+
+from roscoe import AgentRunner
+from roscoe.connectors import GoogleWorkspaceConnector
+
+from tools.gws_tools import build_tools
+
+google = GoogleWorkspaceConnector(
+    {"credentials_file": os.environ["GOOGLE_SA_KEY_FILE"],
+     "subject": os.environ["GOOGLE_SUBJECT"]}
+)
+agent = AgentRunner.from_config("agent_config.yaml", tools=build_tools(google))
+
+if __name__ == "__main__":
+    print(agent.run("Summarize my unread emails and list today's meetings.").output)
+''',
 }
 
 _TEMPLATE_ENV = {
@@ -129,6 +161,11 @@ _TEMPLATE_ENV = {
         "OPENAI_API_KEY=\nMS_CLIENT_ID=\nMS_CLIENT_SECRET=\n"
         "MS_TENANT_ID=\nMS_MAILBOX=\n"
     ),
+    "google_workspace_agent": (
+        "OPENAI_API_KEY=\n"
+        "GOOGLE_SA_KEY_FILE=path/to/service-account.json\n"
+        "GOOGLE_SUBJECT=user@yourdomain.com\n"
+    ),
 }
 
 _EXAMPLE_CASES = {
@@ -138,7 +175,223 @@ _EXAMPLE_CASES = {
 }
 
 
-def scaffold_project(name: str, *, template: str | None = None, dest_dir: str | Path = ".") -> Path:
+# ---------------------------------------------------------------------------
+# Interactive wizard
+# ---------------------------------------------------------------------------
+
+def _run_wizard(name: str) -> dict:
+    """Prompt the user for project settings. Returns a dict of choices."""
+    click.echo()
+    click.secho("  roscoe — new agent setup", bold=True)
+    click.secho("  Configure your agent. All choices go into agent_config.yaml.", dim=True)
+    click.secho("  You can change everything later by editing the YAML.\n", dim=True)
+
+    # --- Provider ---
+    click.echo("LLM Provider:")
+    providers = list(_PROVIDERS.keys())
+    _LABELS = {
+        "openai": "openai",
+        "openrouter": "openrouter  (100+ models, one API key)",
+        "azure_openai": "azure_openai",
+        "anthropic": "anthropic",
+        "gemini": "gemini",
+        "ollama": "ollama  (free, local, no API key)",
+    }
+    for i, p in enumerate(providers, 1):
+        click.echo(f"  [{i}] {_LABELS.get(p, p)}")
+    choice = click.prompt(
+        "Choose provider",
+        type=click.IntRange(1, len(providers)),
+        default=1,
+    )
+    provider = providers[choice - 1]
+    pinfo = _PROVIDERS[provider]
+
+    # --- Model ---
+    model = click.prompt("Model name", default=pinfo["default_model"])
+
+    # --- Temperature ---
+    temperature = click.prompt("Temperature (0.0 = precise, 1.0 = creative)", default=0.1, type=float)
+
+    # --- Base URL ---
+    base_url = pinfo["base_url"]
+    if provider == "openai":
+        if click.confirm("Using a custom endpoint (Together, etc.)?", default=False):
+            base_url = click.prompt("Base URL")
+
+    # --- Azure extras ---
+    azure_deployment = None
+    if provider == "azure_openai":
+        azure_deployment = click.prompt("Azure deployment name", default=model)
+
+    # --- Middleware ---
+    click.echo("\nMiddleware (all recommended for production):")
+    cost_tracking = click.confirm("  Enable cost tracking?", default=True)
+    rate_limiting = click.confirm("  Enable rate limiting?", default=True)
+    rpm = 60
+    if rate_limiting:
+        rpm = click.prompt("  Requests per minute", default=60, type=int)
+    retry = click.confirm("  Enable auto-retry on failures?", default=True)
+    retry_attempts = 3
+    if retry:
+        retry_attempts = click.prompt("  Max retry attempts", default=3, type=int)
+    audit = click.confirm("  Enable audit logging?", default=True)
+
+    # --- Human approval ---
+    click.echo("\nHuman-in-the-loop:")
+    human_approval = click.confirm("  Require approval before running certain tools?", default=False)
+    approval_tools: list[str] = []
+    if human_approval:
+        click.secho("  Enter tool function names that need sign-off (comma-separated).", dim=True)
+        click.secho("  Example: send_email, delete_record, submit_payment", dim=True)
+        raw = click.prompt("  Tools requiring approval")
+        approval_tools = [t.strip() for t in raw.split(",") if t.strip()]
+
+    # --- Memory ---
+    click.echo("\nMemory:")
+    conversation_memory = click.confirm("  Enable conversation memory (remembers within a session)?", default=True)
+    window_size = 10
+    if conversation_memory:
+        window_size = click.prompt("  Conversation window size (messages to keep)", default=10, type=int)
+    persistent_memory = click.confirm("  Enable persistent memory (remembers across sessions, sqlite)?", default=False)
+
+    click.echo()
+
+    return {
+        "provider": provider,
+        "model": model,
+        "temperature": temperature,
+        "base_url": base_url,
+        "azure_deployment": azure_deployment,
+        "env_key": pinfo["env_key"],
+        "cost_tracking": cost_tracking,
+        "rate_limiting": rate_limiting,
+        "rpm": rpm,
+        "retry": retry,
+        "retry_attempts": retry_attempts,
+        "audit": audit,
+        "conversation_memory": conversation_memory,
+        "window_size": window_size,
+        "persistent_memory": persistent_memory,
+        "human_approval": human_approval,
+        "approval_tools": approval_tools,
+    }
+
+
+def _apply_wizard(dest: Path, answers: dict) -> None:
+    """Rewrite agent_config.yaml with the wizard answers, keeping all comments."""
+    cfg_path = dest / "agent_config.yaml"
+    text = cfg_path.read_text()
+
+    # OpenRouter uses the openai provider with a base_url
+    config_provider = "openai" if answers["provider"] == "openrouter" else answers["provider"]
+
+    # Provider + model block
+    model_block = f"  provider: {config_provider}\n"
+    if answers["azure_deployment"]:
+        model_block += f"  deployment: {answers['azure_deployment']}\n"
+        model_block += f"  endpoint: ${{{answers['env_key']}_ENDPOINT}}\n"  # noqa: E501
+    else:
+        model_block += f"  model: {answers['model']}\n"
+    if answers["env_key"]:
+        model_block += f"  api_key: ${{{answers['env_key']}}}\n"
+    model_block += f"  temperature: {answers['temperature']}\n"
+    if answers["base_url"]:
+        model_block += f"  base_url: {answers['base_url']}\n"
+
+    # Replace the active model block (non-comment lines between "model:" and next section)
+    import re
+    model_section = re.search(
+        r"(^model:\n)((?:[ \t]+(?!#).*\n)+)",
+        text,
+        re.MULTILINE,
+    )
+    if model_section:
+        text = text[: model_section.start(2)] + model_block + text[model_section.end(2) :]
+
+    # Middleware toggles
+    _swap = {
+        "enabled: true": "enabled: true",
+        "enabled: false": "enabled: false",
+    }
+
+    # Cost tracking
+    if not answers["cost_tracking"]:
+        text = text.replace(
+            "  cost_tracking:\n    enabled: true",
+            "  cost_tracking:\n    enabled: false",
+        )
+
+    # Rate limiting
+    if not answers["rate_limiting"]:
+        text = text.replace(
+            "  rate_limiter:\n    enabled: true\n    requests_per_minute: 60",
+            "  rate_limiter:\n    enabled: false\n    requests_per_minute: 60",
+        )
+    else:
+        text = text.replace(
+            "    requests_per_minute: 60",
+            f"    requests_per_minute: {answers['rpm']}",
+        )
+
+    # Retry
+    if not answers["retry"]:
+        text = text.replace(
+            "  retry:\n    max_attempts: 3",
+            "  # retry:\n  #   max_attempts: 3",
+        )
+    else:
+        text = text.replace("    max_attempts: 3", f"    max_attempts: {answers['retry_attempts']}")
+
+    # Audit
+    if not answers["audit"]:
+        text = text.replace(
+            "  audit:\n    enabled: true",
+            "  audit:\n    enabled: false",
+        )
+
+    # Human approval
+    if answers["human_approval"] and answers["approval_tools"]:
+        tools_yaml = ", ".join(f'"{t}"' for t in answers["approval_tools"])
+        text = text.replace(
+            "  # human_approval:\n"
+            "  #   require_approval_for:\n"
+            "  #     - send_email             # tool function names that need sign-off\n"
+            "  #     - delete_record\n"
+            "  #     - submit_payment",
+            f"  human_approval:\n"
+            f"    require_approval_for: [{tools_yaml}]",
+        )
+
+    # Memory
+    if not answers["conversation_memory"]:
+        text = text.replace(
+            "  conversation:\n    enabled: true\n    window_size: 10",
+            "  conversation:\n    enabled: false\n    window_size: 10",
+        )
+    else:
+        text = text.replace("    window_size: 10", f"    window_size: {answers['window_size']}")
+
+    if answers["persistent_memory"]:
+        text = text.replace(
+            "    enabled: false              # flip to true to enable cross-session memory",
+            "    enabled: true",
+        )
+
+    cfg_path.write_text(text)
+
+
+# ---------------------------------------------------------------------------
+# Scaffold logic
+# ---------------------------------------------------------------------------
+
+def scaffold_project(
+    name: str,
+    *,
+    template: str | None = None,
+    dest_dir: str | Path = ".",
+    wizard_answers: dict | None = None,
+) -> Path:
     """Create a new project directory. Returns the path created."""
     dest = Path(dest_dir) / name
     if dest.exists():
@@ -153,6 +406,10 @@ def scaffold_project(name: str, *, template: str | None = None, dest_dir: str | 
         shutil.copytree(SCAFFOLD_DIR, dest)
 
     _render_placeholders(dest, name)
+
+    if wizard_answers:
+        _apply_wizard(dest, wizard_answers)
+
     return dest
 
 
@@ -183,16 +440,47 @@ def _render_placeholders(dest: Path, name: str) -> None:
     default=None,
     help="Scaffold from a pre-built template instead of a blank project.",
 )
-def init_command(project_name: str, template: str | None) -> None:
+@click.option(
+    "--quick",
+    is_flag=True,
+    default=False,
+    help="Skip the interactive wizard and use defaults.",
+)
+@click.option(
+    "--cli",
+    is_flag=True,
+    default=False,
+    help="Force CLI wizard instead of GUI window.",
+)
+def init_command(project_name: str, template: str | None, quick: bool, cli: bool) -> None:
     """Create a new roscoe agent project."""
+    wizard_answers = None
+    if not template and not quick:
+        if cli:
+            wizard_answers = _run_wizard(project_name)
+        else:
+            try:
+                from roscoe.cli.wizard_gui import _TkUnavailable, run_wizard_gui
+
+                wizard_answers = run_wizard_gui(project_name)
+                if wizard_answers is None:
+                    raise click.Abort()
+            except _TkUnavailable:
+                click.echo("No display available — falling back to CLI wizard.\n")
+                wizard_answers = _run_wizard(project_name)
+
     try:
-        dest = scaffold_project(project_name, template=template)
+        dest = scaffold_project(project_name, template=template, wizard_answers=wizard_answers)
     except FileExistsError as exc:
         raise click.ClickException(str(exc)) from exc
 
     kind = f"template '{template}'" if template else "blank project"
-    click.echo(f"Created {kind} at {dest}/")
-    click.echo("Next:")
-    click.echo(f"  cd {dest}")
-    click.echo("  cp .env.example .env   # fill in your keys")
-    click.echo("  python main.py")
+    click.echo(click.style(f"  Created {kind} at {dest}/", fg="green", bold=True))
+    click.echo()
+    click.echo("  Next steps:")
+    click.echo(f"    cd {dest}")
+    if not template and wizard_answers and wizard_answers.get("env_key"):
+        click.echo("    cp .env.example .env   # fill in your API key")
+    elif template:
+        click.echo("    cp .env.example .env   # fill in your keys")
+    click.echo("    python main.py")
