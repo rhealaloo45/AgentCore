@@ -29,12 +29,19 @@ def retriable_exceptions(provider: str) -> tuple[type[BaseException], ...]:
         try:
             from openai import (
                 APIConnectionError,
+                APIStatusError,
                 APITimeoutError,
                 InternalServerError,
                 RateLimitError,
             )
 
-            exc += [RateLimitError, APIConnectionError, APITimeoutError, InternalServerError]
+            exc += [
+                RateLimitError,
+                APIConnectionError,
+                APITimeoutError,
+                InternalServerError,
+                APIStatusError,
+            ]
         except ImportError:
             pass
     elif provider == "gemini":
