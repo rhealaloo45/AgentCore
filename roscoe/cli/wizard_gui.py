@@ -57,26 +57,29 @@ LABEL_FG = "#374151"
 CANCEL_BG = "#F3F4F6"
 CANCEL_HOVER = "#E5E7EB"
 
+WIN_WIDTH = 580
+WIN_HEIGHT = 700
+
 
 class _TkUnavailable(Exception):
     pass
 
 
-def _card(parent: tk.Widget, title: str, row: int) -> ttk.Frame:
+def _card(parent: tk.Widget, title: str) -> tk.Frame:
     """Create a titled card frame with consistent styling."""
     outer = tk.Frame(parent, bg=CARD_BG, highlightbackground=BORDER, highlightthickness=1)
-    outer.grid(row=row, column=0, sticky="ew", padx=24, pady=(0, 12))
+    outer.pack(fill="x", padx=24, pady=(0, 12))
     outer.columnconfigure(0, weight=1)
 
     header = tk.Frame(outer, bg=CARD_BG)
-    header.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 0))
+    header.pack(fill="x", padx=16, pady=(14, 0))
     tk.Label(
         header, text=title, font=("Helvetica", 12, "bold"),
         fg=HEADING, bg=CARD_BG, anchor="w",
     ).pack(side="left")
 
     body = tk.Frame(outer, bg=CARD_BG)
-    body.grid(row=1, column=0, sticky="ew", padx=16, pady=(6, 14))
+    body.pack(fill="x", padx=16, pady=(6, 14))
     body.columnconfigure(1, weight=1)
     return body
 
@@ -121,7 +124,8 @@ def run_wizard_gui(project_name: str) -> dict | None:
 
     root.title(f"roscoe — new agent: {project_name}")
     root.configure(bg=BG)
-    root.resizable(False, False)
+    root.resizable(True, True)
+    root.minsize(WIN_WIDTH, 400)
 
     result: dict | None = None
 
@@ -132,38 +136,58 @@ def run_wizard_gui(project_name: str) -> dict | None:
     style.configure("TCombobox", fieldbackground="#FFFFFF")
     style.configure("TCheckbutton", background=CARD_BG)
 
-    # --- Scrollable container ---
-    container = tk.Frame(root, bg=BG)
-    container.pack(fill="both", expand=True)
-    container.columnconfigure(0, weight=1)
+    # ===== Scrollable wrapper =====
+    outer_frame = tk.Frame(root, bg=BG)
+    outer_frame.pack(fill="both", expand=True)
 
-    content_row = 0
+    canvas = tk.Canvas(outer_frame, bg=BG, highlightthickness=0)
+    scrollbar = ttk.Scrollbar(outer_frame, orient="vertical", command=canvas.yview)
+    canvas.configure(yscrollcommand=scrollbar.set)
+
+    scrollbar.pack(side="right", fill="y")
+    canvas.pack(side="left", fill="both", expand=True)
+
+    content = tk.Frame(canvas, bg=BG)
+    content_window = canvas.create_window((0, 0), window=content, anchor="nw")
+
+    def _on_content_configure(_: object) -> None:
+        canvas.configure(scrollregion=canvas.bbox("all"))
+
+    def _on_canvas_configure(event: object) -> None:
+        canvas.itemconfig(content_window, width=event.width)
+
+    content.bind("<Configure>", _on_content_configure)
+    canvas.bind("<Configure>", _on_canvas_configure)
+
+    # Mouse wheel scrolling
+    def _on_mousewheel(event: object) -> None:
+        canvas.yview_scroll(-1 * (event.delta // 120 or (-1 if event.num == 5 else 1)), "units")
+
+    canvas.bind_all("<MouseWheel>", _on_mousewheel)
+    canvas.bind_all("<Button-4>", _on_mousewheel)
+    canvas.bind_all("<Button-5>", _on_mousewheel)
 
     # ===== Header =====
-    header_frame = tk.Frame(container, bg=BG)
-    header_frame.grid(row=content_row, column=0, sticky="ew", padx=24, pady=(20, 4))
+    header_frame = tk.Frame(content, bg=BG)
+    header_frame.pack(fill="x", padx=24, pady=(20, 4))
     tk.Label(
         header_frame, text="roscoe", font=("Helvetica", 22, "bold"),
         fg=ACCENT, bg=BG,
     ).pack(side="left")
-    content_row += 1
 
     tk.Label(
-        container, text=f"Configure your new agent: {project_name}",
+        content, text=f"Configure your new agent: {project_name}",
         font=("Helvetica", 13), fg=HEADING, bg=BG, anchor="w",
-    ).grid(row=content_row, column=0, sticky="w", padx=24, pady=(0, 2))
-    content_row += 1
+    ).pack(fill="x", padx=24, pady=(0, 2))
 
     tk.Label(
-        container,
+        content,
         text="All choices are saved to agent_config.yaml. You can edit it anytime.",
         font=("Helvetica", 10), fg=MUTED, bg=BG, anchor="w",
-    ).grid(row=content_row, column=0, sticky="w", padx=24, pady=(0, 16))
-    content_row += 1
+    ).pack(fill="x", padx=24, pady=(0, 16))
 
     # ===== Card 1: LLM Provider =====
-    card1 = _card(container, "LLM Provider", content_row)
-    content_row += 1
+    card1 = _card(content, "LLM Provider")
 
     provider_var = tk.StringVar(value="openai")
     provider_labels = [label for label, _ in _PROVIDERS]
@@ -228,8 +252,7 @@ def run_wizard_gui(project_name: str) -> dict | None:
     provider_combo.bind("<<ComboboxSelected>>", _on_provider_change)
 
     # ===== Card 2: Middleware =====
-    card2 = _card(container, "Middleware", content_row)
-    content_row += 1
+    card2 = _card(content, "Middleware")
 
     cost_var = tk.BooleanVar(value=True)
     _checkbox(card2, "Cost tracking — estimate USD per run", cost_var, 0)
@@ -250,8 +273,7 @@ def run_wizard_gui(project_name: str) -> dict | None:
     _checkbox(card2, "Audit logging — JSONL record of every run", audit_var, 3)
 
     # ===== Card 3: Human-in-the-loop =====
-    card3 = _card(container, "Human-in-the-loop", content_row)
-    content_row += 1
+    card3 = _card(content, "Human-in-the-loop")
 
     hitl_var = tk.BooleanVar(value=False)
     _checkbox(card3, "Require approval before running certain tools", hitl_var, 0)
@@ -262,8 +284,7 @@ def run_wizard_gui(project_name: str) -> dict | None:
     _hint(card3, "Comma-separated function names, e.g. send_email, submit_payment", 2)
 
     # ===== Card 4: Memory =====
-    card4 = _card(container, "Memory", content_row)
-    content_row += 1
+    card4 = _card(content, "Memory")
 
     conv_var = tk.BooleanVar(value=True)
     _checkbox(card4, "Conversation memory — remembers within a session", conv_var, 0)
@@ -274,9 +295,15 @@ def run_wizard_gui(project_name: str) -> dict | None:
     persist_var = tk.BooleanVar(value=False)
     _checkbox(card4, "Persistent memory — remembers across sessions (sqlite)", persist_var, 1)
 
-    # ===== Buttons =====
-    btn_frame = tk.Frame(container, bg=BG)
-    btn_frame.grid(row=content_row, column=0, sticky="e", padx=24, pady=(4, 20))
+    # ===== Buttons (fixed at bottom, outside scroll) =====
+    btn_bar = tk.Frame(root, bg=BG)
+    btn_bar.pack(fill="x", side="bottom")
+
+    separator = tk.Frame(btn_bar, bg=BORDER, height=1)
+    separator.pack(fill="x")
+
+    btn_inner = tk.Frame(btn_bar, bg=BG)
+    btn_inner.pack(anchor="e", padx=24, pady=14)
 
     def _on_create() -> None:
         nonlocal result
@@ -315,7 +342,7 @@ def run_wizard_gui(project_name: str) -> dict | None:
         root.destroy()
 
     cancel_btn = tk.Button(
-        btn_frame, text="Cancel", command=_on_cancel,
+        btn_inner, text="Cancel", command=_on_cancel,
         bg=CANCEL_BG, fg=LABEL_FG, activebackground=CANCEL_HOVER,
         relief="flat", padx=16, pady=6, font=("Helvetica", 11),
         cursor="hand2", highlightthickness=0, bd=0,
@@ -323,7 +350,7 @@ def run_wizard_gui(project_name: str) -> dict | None:
     cancel_btn.pack(side="left", padx=(0, 10))
 
     create_btn = tk.Button(
-        btn_frame, text="Create Project", command=_on_create,
+        btn_inner, text="Create Project", command=_on_create,
         bg=ACCENT, fg=ACCENT_FG, activebackground=ACCENT_HOVER,
         activeforeground=ACCENT_FG,
         relief="flat", padx=20, pady=6, font=("Helvetica", 11, "bold"),
@@ -331,13 +358,22 @@ def run_wizard_gui(project_name: str) -> dict | None:
     )
     create_btn.pack(side="left")
 
-    # --- Center on screen ---
+    # --- Size and center on screen ---
     root.update_idletasks()
-    w = max(root.winfo_width(), 560)
-    h = root.winfo_height()
-    x = (root.winfo_screenwidth() // 2) - (w // 2)
-    y = (root.winfo_screenheight() // 2) - (h // 2)
-    root.geometry(f"{w}x{h}+{x}+{y}")
+    screen_h = root.winfo_screenheight()
+    h = min(WIN_HEIGHT, screen_h - 100)
+    x = (root.winfo_screenwidth() // 2) - (WIN_WIDTH // 2)
+    y = (screen_h // 2) - (h // 2)
+    root.geometry(f"{WIN_WIDTH}x{h}+{x}+{y}")
 
     root.mainloop()
+
+    # Unbind mousewheel to avoid errors after window closes
+    try:
+        canvas.unbind_all("<MouseWheel>")
+        canvas.unbind_all("<Button-4>")
+        canvas.unbind_all("<Button-5>")
+    except Exception:
+        pass
+
     return result

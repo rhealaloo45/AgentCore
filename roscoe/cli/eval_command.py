@@ -11,6 +11,7 @@ to a list of tools (e.g. ``tools.my_tools:TOOLS``).
 from __future__ import annotations
 
 import importlib
+import os
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,10 @@ def _load_tools(tools_ref: str | None) -> list[Any]:
         return []
     if ":" not in tools_ref:
         raise ValueError("--tools must be 'module:attribute', e.g. tools.my_tools:TOOLS")
+    import sys
+    cwd = os.getcwd()
+    if cwd not in sys.path:
+        sys.path.insert(0, cwd)
     module_name, attr = tools_ref.split(":", 1)
     module = importlib.import_module(module_name)
     tools = getattr(module, attr)
@@ -45,6 +50,13 @@ def run_eval(
     pass_threshold: float = 0.7,
 ):
     """Run the eval suite and return an EvalReport."""
+    env_file = Path(".env")
+    if env_file.exists():
+        try:
+            from dotenv import load_dotenv
+            load_dotenv()
+        except ImportError:
+            pass
     cases = load_dataset(dataset_path)
     tools = _load_tools(tools_ref)
     agent = AgentRunner.from_config(config_path, tools=tools)
