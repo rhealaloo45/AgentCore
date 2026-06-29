@@ -1,0 +1,34 @@
+agent_name: knowledge-base-agent
+
+system_prompt_file: prompts/system.txt
+
+model:
+  provider: openai
+  model: gpt-4o-mini
+  api_key: ${OPENAI_API_KEY}
+  temperature: 0.1
+
+# Built in code: NotionConnector and/or SharePointConnector + KnowledgeMemory.
+connectors:
+  notion:
+    token: ${NOTION_TOKEN}
+  sharepoint:
+    client_id: ${MS_CLIENT_ID}
+    client_secret: ${MS_CLIENT_SECRET}
+    tenant_id: ${MS_TENANT_ID}
+    site_id: ${SP_SITE_ID}
+
+memory:
+  conversation:
+    enabled: true
+    window_size: 10
+
+middleware:
+  retry:
+    max_attempts: 3
+  rate_limiter:
+    rpm: 60
+  cost_tracking:
+    enabled: true
+  audit:
+    enabled: true

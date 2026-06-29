@@ -1,0 +1,37 @@
+{
+  "_comment": [
+    "Eval test cases for __PROJECT_NAME__.",
+    "",
+    "Each case tests one thing the agent should handle. Fields:",
+    "  id              — unique identifier for this case",
+    "  input           — the user message to send to the agent",
+    "  expected_tools  — (optional) tools the agent SHOULD call, in order",
+    "  expected_output — (optional) substring or description of correct output",
+    "  context_docs    — (optional) ground-truth docs for hallucination scoring",
+    "  metadata        — (optional) tags for filtering (e.g. category, priority)",
+    "",
+    "Run evals:",
+    "  roscoe eval --dataset evals/test_cases.json --config agent_config.yaml",
+    "",
+    "Add --judge for LLM-as-judge scoring (quality + hallucination).",
+    "Without --judge, only deterministic tool-usage scoring runs.",
+    "",
+    "Compare two eval runs for regressions:",
+    "  from roscoe.evals.regression import compare_runs"
+  ],
+  "cases": [
+    {
+      "id": "weather-london",
+      "input": "What's the weather in London?",
+      "expected_tools": ["get_weather"],
+      "metadata": {"category": "tool-use"}
+    },
+    {
+      "id": "greeting",
+      "input": "Hello, who are you?",
+      "expected_output": "A helpful assistant introduction.",
+      "expected_tools": [],
+      "metadata": {"category": "no-tool"}
+    }
+  ]
+}

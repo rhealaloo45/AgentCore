@@ -89,3 +89,10 @@ Thumbs.db
 
 # Project-specific
 PLAN.md
+
+# roscoe runtime
+logs/
+
+# local-only build spec (kept out of the repo)
+PLAN.md
+test_steps.md
