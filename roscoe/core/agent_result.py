@@ -17,8 +17,9 @@ class AgentResult:
         cost_usd: Estimated cost in USD. ``None`` until the Phase 3 cost tracker
             populates it.
         error: Error message if the run failed, else ``None``.
-        status: ``"success"`` | ``"error"`` | ``"paused"`` (paused = awaiting
-            human approval, see Phase 6).
+        status: ``"success"`` | ``"error"`` | ``"paused"`` | ``"rate_limited"``.
+            ``paused`` = awaiting human approval. ``rate_limited`` = retries
+            exhausted due to provider rate limits; caller should retry later.
         pending_action: When ``status == "paused"``, the intercepted tool call
             awaiting approval; otherwise ``None``.
         tool_calls: Ordered names of tools the agent invoked during the run. Used by

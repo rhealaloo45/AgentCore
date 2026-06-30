@@ -38,6 +38,12 @@ CAPABILITIES: dict[str, dict[str, bool]] = {
         "cost_tracking": False,  # local, always $0.00
         "rate_limiting": False,  # local, no external limits
     },
+    "nvidia": {
+        "tool_calling": True,  # model-dependent; most NIM models support it
+        "streaming": True,
+        "cost_tracking": True,
+        "rate_limiting": True,
+    },
 }
 
 _DEFAULT = {
