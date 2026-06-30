@@ -99,12 +99,39 @@ class _OllamaProvider(BaseProvider):
         return get_capabilities("ollama")
 
 
+class _NvidiaProvider(BaseProvider):
+    def get_llm(self, config: dict[str, Any]) -> BaseChatModel:
+        from langchain_nvidia_ai_endpoints import ChatNVIDIA
+
+        _require(config, "nvidia", "model", "api_key")
+        kwargs: dict[str, Any] = {
+            "model": config["model"],
+            "api_key": config["api_key"],
+            "temperature": config.get("temperature", 0.1),
+        }
+        if config.get("top_p") is not None:
+            kwargs["top_p"] = config["top_p"]
+        if config.get("max_tokens") is not None:
+            kwargs["max_tokens"] = config["max_tokens"]
+        if config.get("reasoning_budget") is not None:
+            kwargs["reasoning_budget"] = config["reasoning_budget"]
+        if config.get("chat_template_kwargs") is not None:
+            kwargs["chat_template_kwargs"] = config["chat_template_kwargs"]
+        if config.get("base_url") is not None:
+            kwargs["base_url"] = config["base_url"]
+        return ChatNVIDIA(**kwargs)
+
+    def capabilities(self) -> dict[str, bool]:
+        return get_capabilities("nvidia")
+
+
 _BUILTINS: dict[str, BaseProvider] = {
     "azure_openai": _AzureOpenAIProvider(),
     "openai": _OpenAIProvider(),
     "gemini": _GeminiProvider(),
     "anthropic": _AnthropicProvider(),
     "ollama": _OllamaProvider(),
+    "nvidia": _NvidiaProvider(),
 }
 
 

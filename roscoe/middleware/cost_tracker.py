@@ -33,6 +33,7 @@ COST_TABLE: dict[str, dict[str, dict[str, float]]] = {
         "claude-sonnet-4-5": {"input": 0.003, "output": 0.015},
     },
     "ollama": {},  # always $0.00
+    "nvidia": {},  # always $0.00 — NVIDIA NIM free-tier models have $0/token pricing
 }
 
 
@@ -61,7 +62,7 @@ def calculate_cost(
     provider_rates = COST_TABLE.get(provider)
     if provider_rates is None:
         return None
-    if provider == "ollama":
+    if provider in ("ollama", "nvidia"):
         return 0.0
     rates = provider_rates.get(model)
     if rates is None:

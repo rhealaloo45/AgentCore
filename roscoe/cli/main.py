@@ -4,6 +4,13 @@ from __future__ import annotations
 
 import click
 
+# Load .env before any config parsing so ${ENV_VAR} references resolve.
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv()
+except ImportError:
+    pass
+
 from roscoe import __version__
 from roscoe.cli.eval_command import eval_command
 from roscoe.cli.init_command import init_command

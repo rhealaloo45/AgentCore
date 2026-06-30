@@ -16,6 +16,7 @@ tool and returns a ``paused`` result. Call ``resume(run_id, decision)`` to conti
 from __future__ import annotations
 
 import asyncio
+import threading
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
@@ -146,8 +147,14 @@ class AgentRunner:
         try:
             exec_result = await self._executor.run(input_messages)
         except Exception as exc:  # noqa: BLE001 — surface any failure as a result
+            status = "rate_limited" if _is_rate_limit_exc(exc) else "error"
+            error_msg = (
+                "The AI service is currently rate-limited. Please try again in a moment."
+                if status == "rate_limited"
+                else f"{type(exc).__name__}: {exc}"
+            )
             result = AgentResult(
-                output="", run_id=run_id, error=f"{type(exc).__name__}: {exc}", status="error"
+                output="", run_id=run_id, error=error_msg, status=status
             )
             self._write_audit(result, user_id, start)
             return result
@@ -161,7 +168,7 @@ class AgentRunner:
         user_id: str | None = None,
         session_id: str | None = None,
     ) -> AgentResult:
-        return asyncio.run(self.arun(user_input, user_id=user_id, session_id=session_id))
+        return _run_sync(self.arun(user_input, user_id=user_id, session_id=session_id))
 
     async def aresume(
         self,
@@ -195,8 +202,14 @@ class AgentRunner:
         try:
             exec_result = await self._executor.resume(convo)
         except Exception as exc:  # noqa: BLE001
+            status = "rate_limited" if _is_rate_limit_exc(exc) else "error"
+            error_msg = (
+                "The AI service is currently rate-limited. Please try again in a moment."
+                if status == "rate_limited"
+                else f"{type(exc).__name__}: {exc}"
+            )
             result = AgentResult(
-                output="", run_id=run_id, error=f"{type(exc).__name__}: {exc}", status="error"
+                output="", run_id=run_id, error=error_msg, status=status
             )
             self._write_audit(result, pending.user_id, start)
             return result
@@ -208,7 +221,7 @@ class AgentRunner:
     def resume(
         self, run_id: str, decision: str, *, payload: dict[str, Any] | None = None
     ) -> AgentResult:
-        return asyncio.run(self.aresume(run_id, decision, payload=payload))
+        return _run_sync(self.aresume(run_id, decision, payload=payload))
 
     # --- result handling ---
 
@@ -373,3 +386,30 @@ def _tool_names(messages: list[Any]) -> list[str]:
         for call in getattr(msg, "tool_calls", None) or []:
             names.append(call["name"])
     return names
+
+
+_thread_local = threading.local()
+
+
+def _run_sync(coro):
+    """Run a coroutine from sync code using a persistent per-thread event loop.
+
+    ``asyncio.run()`` closes the loop after every call, which invalidates any
+    asyncio primitives (locks, semaphores) held on the AgentRunner instance
+    (e.g. the rate-limiter's TokenBucket lock). Reusing the loop per thread
+    avoids the "Event loop is closed" error that appears on the second request
+    in Flask / other sync web frameworks.
+    """
+    loop = getattr(_thread_local, "loop", None)
+    if loop is None or loop.is_closed():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        _thread_local.loop = loop
+    return loop.run_until_complete(coro)
+
+
+def _is_rate_limit_exc(exc: BaseException) -> bool:
+    """Return True if the exception is a rate-limit error from any provider."""
+    _MARKERS = ("429", "ratelimit", "rate_limit", "rate-limit", "resource exhausted", "quota")
+    msg = f"{type(exc).__name__} {exc}".lower()
+    return any(m in msg for m in _MARKERS)

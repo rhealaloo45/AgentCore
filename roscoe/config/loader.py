@@ -40,6 +40,15 @@ def load_config(path: str | Path) -> dict[str, Any]:
     if not p.is_file():
         raise ConfigError(f"Config file not found: {p}")
 
+    # Load .env from the config file's directory (then CWD as fallback) so
+    # ${ENV_VAR} references resolve without manual exports or shell setup.
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(p.parent / ".env", override=False)
+        load_dotenv(override=False)  # CWD fallback
+    except ImportError:
+        pass
+
     raw = yaml.safe_load(p.read_text()) or {}
     if not isinstance(raw, dict):
         raise ConfigError(

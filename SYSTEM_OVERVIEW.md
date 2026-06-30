@@ -36,6 +36,87 @@ What ROSCOE builds itself:
 
 ---
 
+## Agent Execution Flow (LangChain perspective)
+
+```
+USER
+  │
+  │  "Reset John's password"
+  ▼
+┌─────────────────────────────────────────────────────┐
+│  AgentRunner.run()                                  │
+│  • Load agent_config.yaml                           │
+│  • Attach memory (conversation window + SQLite)     │
+│  • Build message list: [SystemMessage, ...history,  │
+│    HumanMessage("Reset John's password")]           │
+└───────────────────┬─────────────────────────────────┘
+                    │
+                    ▼
+┌─────────────────────────────────────────────────────┐
+│  MIDDLEWARE STACK (applied before every LLM call)   │
+│  rate_limiter → retry wrapper → audit log → cost    │
+└───────────────────┬─────────────────────────────────┘
+                    │
+                    ▼
+┌─────────────────────────────────────────────────────┐
+│  ChatOpenAI.invoke(messages)                        │
+│  (or ChatAnthropic / ChatGoogleGenerativeAI / etc.) │
+│  Model is already bound to tools via bind_tools()   │
+└───────────────────┬─────────────────────────────────┘
+                    │
+                    ▼
+         ╔══════════════════════════╗
+         ║   REACT LOOP (executor) ║  ← repeats until done or max_iterations
+         ╚══════════════════════════╝
+                    │
+                    ▼
+         Parse AIMessage response
+                    │
+          ┌─────────┴──────────┐
+          │                    │
+     tool_calls?            NO tool_calls
+      (YES)                     │
+          │                     ▼
+          │              ┌──────────────┐
+          │              │ Final Answer │ ← exit loop
+          │              └──────┬───────┘
+          ▼                     │
+  HITL Check                    │
+  (ApprovalGate)                │
+          │                     │
+   ┌──────┴──────┐              │
+   │             │              │
+needs         no approval       │
+approval      needed            │
+   │             │              │
+   ▼             ▼              │
+PAUSE      Execute Tool         │
+status=    tool.invoke(args)    │
+"paused"   → ToolMessage        │
+   │             │              │
+   │    append ToolMessage      │
+   │    to message list         │
+   │    loop back to LLM ───────┘ (calls LLM again with tool result)
+   │
+   ▼
+User calls agent.resume(run_id, "approve" | "reject")
+  → tool executes (or skips)
+  → loop continues
+
+                    │
+                    ▼
+┌─────────────────────────────────────────────────────┐
+│  AgentResult                                        │
+│  • output    — the agent's final text reply         │
+│  • status    — "success" | "error" | "paused"       │
+│  • total_tokens — from LangChain usage_metadata     │
+│  • cost_usd  — estimated from token count           │
+│  • run_id    — ties to audit log in logs/audit.jsonl│
+└─────────────────────────────────────────────────────┘
+```
+
+---
+
 ## How It Works: The Full Flow
 
 ### Step 1: Configuration Loading
